@@ -18,10 +18,11 @@ def main():
 
     # Init params
     init_params = sl.InitParameters()
-    init_params.camera_resolution = sl.RESOLUTION.HD720  # Adjust as needed
+    init_params.camera_resolution = sl.RESOLUTION.AUTO  # Adjust as needed
     init_params.depth_mode = sl.DEPTH_MODE.NONE
+    init_params.sdk_verbose = 1
     init_params.coordinate_units = sl.UNIT.METER
-    init_params.camera_fps = 15
+    init_params.camera_fps = 30
     # Initialize the ZED camera
     zed = sl.Camera()
     # Open the camera
@@ -51,7 +52,7 @@ def main():
     
     # ____________YOLO CONFIGURATION_______________
     model = YOLO(opt.weights)
-    classes_to_count = [0, 2]  # person and car classes for count
+    classes_to_count = [0]  # person and car classes for count
     # Initialize object counter with class names
     counter = ObjectCounter(view_img=False,
                  reg_pts=line_points,
@@ -80,7 +81,7 @@ def main():
 
             # Start counting objects using the object counter
             im0 = counter.start_counting(im0, tracks, line_direction)
-            # time.sleep(0.02)  
+            # time.sleep(1)  
 
             # Display the frame
             cv2.imshow("ZED | Object Counting", im0)
