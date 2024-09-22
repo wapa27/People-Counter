@@ -6,7 +6,7 @@ In order to run correctly, Ultralytics' ObjectCounter will need to updated with 
 ```
 ## Run the program
 ```
-python3 people_counter.py --weights yolov8m.pt --roi [line or polygon] --line_direction [vertical or horizontal]
+python3 people_counter.py --weights yolov8m.pt --roi [line or polygon] --line_direction [vertical or horizontal] --output_path [path/to/output] --save-interval [number in seconds] --write_batch_interval [number in seconds]
 ```
 
 
