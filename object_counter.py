@@ -3,6 +3,13 @@
 from collections import defaultdict
 
 import cv2
+import os
+import shutil
+import threading
+import subprocess
+
+
+from datetime import datetime, timedelta
 
 from ultralytics.utils.checks import check_imshow, check_requirements
 from ultralytics.utils.plotting import Annotator, colors
@@ -18,6 +25,7 @@ class ObjectCounter:
     def __init__(
         self,
         names,
+        output_path,
         reg_pts=None,
         count_reg_color=(255, 0, 255),
         count_txt_color=(0, 0, 0),
@@ -31,7 +39,7 @@ class ObjectCounter:
         track_color=None,
         region_thickness=5,
         line_dist_thresh=15,
-        cls_txtdisplay_gap=50,
+        cls_txtdisplay_gap=50
     ):
         """
         Initializes the ObjectCounter with various tracking and counting parameters.
@@ -102,6 +110,16 @@ class ObjectCounter:
         self.p_bottom_left = None
         self.p_bottom_right = None
         self.id_location_mapper = defaultdict()
+        self.output_path = output_path
+        self.last_recorded_pic = datetime.now()
+        self.batch_interval_reference = datetime.now()
+        self.cwd = os.getcwd()
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.local_output_directory = f"output-{timestamp}"
+        self.full_path = self.cwd + "/" + self.local_output_directory + "/"
+        os.makedirs(self.full_path, exist_ok=True)
+        self.cleanup_script = os.path.join(os.getcwd(), "cleanup.py")
+        self.cleanup_process = subprocess.Popen(["python", self.cleanup_script])
 
         # Initialize counting region
         if len(self.reg_pts) == 2:
@@ -114,37 +132,6 @@ class ObjectCounter:
             print("Invalid Region points provided, region_points must be 2 for lines or >= 3 for polygons.")
             print("Using Line Counter Now")
             self.counting_region = LineString(self.reg_pts)
-
-    def mouse_event_for_region(self, event, x, y, flags, params):
-        """
-        Handles mouse events for defining and moving the counting region in a real-time video stream.
-
-        Args:
-            event (int): The type of mouse event (e.g., cv2.EVENT_MOUSEMOVE, cv2.EVENT_LBUTTONDOWN, etc.).
-            x (int): The x-coordinate of the mouse pointer.
-            y (int): The y-coordinate of the mouse pointer.
-            flags (int): Any associated event flags (e.g., cv2.EVENT_FLAG_CTRLKEY,  cv2.EVENT_FLAG_SHIFTKEY, etc.).
-            params (dict): Additional parameters for the function.
-        """
-        if event == cv2.EVENT_LBUTTONDOWN:
-            for i, point in enumerate(self.reg_pts):
-                if (
-                    isinstance(point, (tuple, list))
-                    and len(point) >= 2
-                    and (abs(x - point[0]) < 10 and abs(y - point[1]) < 10)
-                ):
-                    self.selected_point = i
-                    self.is_drawing = True
-                    break
-
-        elif event == cv2.EVENT_MOUSEMOVE:
-            if self.is_drawing and self.selected_point is not None:
-                self.reg_pts[self.selected_point] = (x, y)
-                self.counting_region = Polygon(self.reg_pts)
-
-        elif event == cv2.EVENT_LBUTTONUP:
-            self.is_drawing = False
-            self.selected_point = None
 
     def extract_and_process_tracks(self, tracks, line_direction):
         """Extracts and processes tracks for object counting in a video stream."""
@@ -161,7 +148,6 @@ class ObjectCounter:
             confs = tracks[0].boxes.conf.cpu().tolist() # Added to get confidence %
 
             # Extract tracks
-            
             for box, track_id, cls, conf in zip(boxes, track_ids, clss, confs):
                 
                 # Draw bounding box
@@ -213,13 +199,6 @@ class ObjectCounter:
                     bounding_box_min_y = top_left[1] if top_left[1] < bottom_left[1] else bottom_left[1]
                     bounding_box_max_y = top_right[1] if top_right[1] > bottom_right[1] else bottom_right[1]
                 
-                # Previous bounding box coordinates
-                if self.p_xyxy.get(track_id) is not None:
-                    p_x1, p_y1, p_x2, p_y2 = self.p_xyxy[track_id][-1].tolist()
-                    # p_top_left = (p_x1, p_y1)
-                    # p_top_right = (p_x2, p_y1)
-                    # p_bottom_left = (p_x1, p_y2)
-                    # p_bottom_right = (p_x2, p_y2)
                     
                 if(len(self.reg_pts) == 2 and track_id not in self.id_location_mapper and line_direction == 'vertical'):
                     if (bounding_box_min_x > roi_max_x):
@@ -263,63 +242,7 @@ class ObjectCounter:
                     
                 prev_position = self.track_history[track_id][-2] if len(self.track_history[track_id]) > 1 else None
                 if prev_position is None: continue
-                
-                # # Count objects in any polygon
-                # if len(self.reg_pts) >= 3 and line_direction == 'vertical':
-                #         if ((top_left[0] > self.reg_pts[3][0] or bottom_left[0] > self.reg_pts[3][0])
-                #             and self.id_location_mapper[track_id] != "right"):
-                #             self.in_counts += 1
-                #             self.class_wise_count[self.names[cls]]["IN"] += 1
-                #             self.id_location_mapper[track_id] = "right"
                             
-                #         elif ((top_right[0] < self.reg_pts[0][0] or bottom_right[0] < self.reg_pts[0][0])
-                #             and self.id_location_mapper[track_id] != "left"):
-                #             self.out_counts += 1
-                #             self.class_wise_count[self.names[cls]]["OUT"] += 1
-                #             self.id_location_mapper[track_id] = "left"
-                        
-                # elif len(self.reg_pts) >= 3 and line_direction == 'horizontal':
-                #         if ((top_left[1] > self.reg_pts[1][1] or top_right[1] > self.reg_pts[1][1])
-                #             and self.id_location_mapper[track_id] != "bottom"):
-                #             self.in_counts += 1
-                #             self.class_wise_count[self.names[cls]]["IN"] += 1
-                #             self.id_location_mapper[track_id] = "bottom"
-                            
-                #         elif ((bottom_left[1] < self.reg_pts[0][1] or bottom_right[1] < self.reg_pts[0][1])
-                #             and self.id_location_mapper[track_id] != "top"):
-                #             self.out_counts += 1
-                #             self.class_wise_count[self.names[cls]]["OUT"] += 1
-                #             self.id_location_mapper[track_id] = "top"    
-                # # Count objects crossing a line
-                # elif len(self.reg_pts) == 2 and line_direction == 'vertical':
-                #     # if prev_position is not None and len(self.p_xyxy) > 0:
-                #         if (top_left[0] > self.reg_pts[0][0] 
-                #             and self.id_location_mapper[track_id] != "right"):
-                #             self.in_counts += 1
-                #             self.class_wise_count[self.names[cls]]["IN"] += 1
-                #             self.id_location_mapper[track_id] = "right"
-                #         elif (top_right[0] < self.reg_pts[0][0] 
-                #               and self.id_location_mapper[track_id] != "left"):
-                #             self.out_counts += 1
-                #             self.class_wise_count[self.names[cls]]["OUT"] += 1
-                #             self.id_location_mapper[track_id] = "left"
-                            
-                # elif len(self.reg_pts) == 2 and line_direction == 'horizontal':
-                #     # if prev_position is not None and len(self.p_xyxy) > 0:
-                #         if ((bottom_left[1] < self.reg_pts[0][1]
-                #              or bottom_right[1] < self.reg_pts[0][1]) 
-                #             and self.id_location_mapper[track_id] != "top"):
-                #             self.in_counts += 1
-                #             self.class_wise_count[self.names[cls]]["IN"] += 1
-                #             self.id_location_mapper[track_id] = "top"
-                #         elif ((top_right[1] > self.reg_pts[0][1] 
-                #                 or top_left[1] > self.reg_pts[0][1])
-                #               and self.id_location_mapper[track_id] != "bottom"):
-                #             self.out_counts += 1
-                #             self.class_wise_count[self.names[cls]]["OUT"] += 1
-                #             self.id_location_mapper[track_id] = "bottom"
-                
-                
                 # Count objects in any polygon
                 if len(self.reg_pts) >= 3 and line_direction == 'vertical':
                         if (bounding_box_min_x > roi_max_x
@@ -381,33 +304,88 @@ class ObjectCounter:
                         self.p_xyxy[track_id].pop(0)
 
         labels_dict = {}
-
+        # print(self.class_wise_count.get('person')['IN'] == 0)
+        # if self.class_wise_count.get('person')['IN'] == 0 and self.class_wise_count.get('person')['OUT'] == 0:
+        #     labels_dict[str.capitalize(key)] = "IN {0['IN']} OUT {0['OUT']}"
+        # else:
         for key, value in self.class_wise_count.items():
-            if value["IN"] != 0 or value["OUT"] != 0:
-                if not self.view_in_counts and not self.view_out_counts:
-                    continue
-                elif not self.view_in_counts:
-                    labels_dict[str.capitalize(key)] = f"OUT {value['OUT']}"
-                elif not self.view_out_counts:
-                    labels_dict[str.capitalize(key)] = f"IN {value['IN']}"
-                else:
-                    labels_dict[str.capitalize(key)] = f"IN {value['IN']} OUT {value['OUT']}"
+            # if value["IN"] != 0 or value["OUT"] != 0:
+            #     if not self.view_in_counts and not self.view_out_counts:
+            #         continue
+            #     elif not self.view_in_counts:
+            #         labels_dict[str.capitalize(key)] = f"OUT {value['OUT']}"
+            #     elif not self.view_out_counts:
+            #         labels_dict[str.capitalize(key)] = f"IN {value['IN']}"
+            #     else:
+            labels_dict[str.capitalize(key)] = f"IN {value['IN']} OUT {value['OUT']}"
 
         if labels_dict:
             self.annotator.display_analytics(self.im0, labels_dict, self.count_txt_color, self.count_bg_color, 10)
+    
+    def clear_counts(self):
+        print('Clearing counts')
+        self.class_wise_count.get('person')['IN'] = 0
+        self.class_wise_count.get('person')['OUT'] = 0
 
-    def display_frames(self):
+    def is_more_than_n_seconds(self, date1, date2, seconds):
+        difference = abs(date1 - date2)
+        return difference > timedelta(seconds=seconds)
+
+    def write_to_flash(self, image_path, output_path):
+        try:
+            filename = os.path.basename(image_path)
+            destination_path = os.path.join(output_path, filename)
+            shutil.copy2(image_path, destination_path)
+        except Exception as e:
+            print(f"Error copying {image_path} to flash drive: {e}")
+
+    def process_images(self, directory):
+        if os.path.exists(directory):
+            os.makedirs(self.output_path, exist_ok=True)
+            threads = []
+            for filename in os.listdir(directory):
+                if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
+                    image_path = os.path.join(directory, filename)
+                    thread = threading.Thread(target=self.write_to_flash, args=(image_path, self.output_path))
+                    thread.start()
+                    threads.append(thread)
+            for thread in threads:
+                thread.join()
+
+    def capture_and_save_image(self, now):
+        formatted_time = now.strftime("%Y-%m-%d_%H-%M-%S")
+        file_name = f"file_{formatted_time}.jpg"
+        image_path = os.path.join(self.full_path, file_name)
+        cv2.imwrite(image_path, self.im0)
+        self.last_recorded_pic = now
+
+    def handle_batch_interval(self, now):
+        self.process_images(self.full_path)
+        # Use a timestamp format without invalid characters
+        formatted_time = now.strftime("%Y-%m-%d_%H-%M-%S")
+        self.local_output_directory = f"output-{formatted_time}"
+        os.makedirs(self.local_output_directory, exist_ok=True)
+        self.full_path = os.path.join(self.cwd, self.local_output_directory, "")
+        self.batch_interval_reference = now
+
+    def display_frames(self, isAnyoneInFrame, save_interval, write_batch_interval):
         """Displays the current frame with annotations and regions in a window."""
         if self.env_check:
-            cv2.namedWindow(self.window_name)
-            if len(self.reg_pts) == 4:  # only add mouse event If user drawn region
-                cv2.setMouseCallback(self.window_name, self.mouse_event_for_region, {"region_points": self.reg_pts})
             cv2.imshow(self.window_name, self.im0)
-            # Break Window
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                return
+            # if isAnyoneInFrame:
+            now = datetime.now()
+            if isAnyoneInFrame and self.is_more_than_n_seconds(self.last_recorded_pic, now, save_interval):
+                self.capture_and_save_image(now)
 
-    def start_counting(self, im0, tracks, line_direction):
+            if self.is_more_than_n_seconds(self.batch_interval_reference, now, write_batch_interval):
+                threading.Thread(target=self.handle_batch_interval, args=(now,)).start()
+
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            self.cleanup_process.terminate()
+            self.cleanup_process.wait()
+            exit(0)
+
+    def start_counting(self, im0, tracks, line_direction, save_interval, write_batch_interval):
         """
         Main function to start the object counting process.
 
@@ -419,7 +397,9 @@ class ObjectCounter:
         self.extract_and_process_tracks(tracks, line_direction)  # draw region even if no objects
 
         if self.view_img:
-            self.display_frames()
+            # print(len(self.track_history[1]))
+            isAnyoneInFrame = tracks[0].boxes.id is not None
+            self.display_frames(isAnyoneInFrame, save_interval, write_batch_interval)
         return self.im0
 
 if __name__ == "__main__":
